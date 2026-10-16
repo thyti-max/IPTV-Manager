@@ -1,0 +1,70 @@
+# Base44 sandbox preview stack for IPTV-Manager.
+#
+# This is NOT the project's deployment compose (docker-compose.yml runs the
+# prebuilt ghcr.io image). Here the app runs from the cloned source with the
+# repository bind-mounted, so edits appear in the preview without an image
+# rebuild. One service is enough: Express serves the Web UI from public/ and the
+# API, and SQLite lives on a volume — no supporting services are required.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/base44.dev.Dockerfile
+    restart: on-failure
+    working_dir: /app
+    # Runs as root because the sandbox checks the repository out as root-only
+    # (0700), so the non-root `app`/`node` user the project's own image uses
+    # cannot read the bind-mounted source. This is a throwaway sandbox stack;
+    # the deployed image still drops privileges.
+    #
+    # The preview proxy terminates TLS and forwards to this port on the sandbox host.
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app # live source: edits are picked up without rebuilding
+      - base44-node-modules:/app/node_modules # deps installed at start-up, kept out of the repo
+      - base44-npm-cache:/root/.npm # download cache, so a re-created container re-installs quickly
+      - base44-data:/data # DATA_DIR: db.sqlite, epg.db, cache/, generated jwt.secret/secret.key
+    env_file:
+      - ./.env.base44-defaults # sandbox defaults (dev admin password, …)
+      - /run/base44/app.env # platform-delivered secrets — LAST, always wins
+    environment:
+      - DATA_DIR=/data
+      - PORT=3000
+      - NODE_ENV=development
+      # Requests arrive through the Base44 preview proxy, so the app must trust
+      # its forwarding headers to see real client IPs and req.secure.
+      - TRUST_PROXY=true
+    # Dependencies live on a volume rather than in the image, so they are synced
+    # from the lockfile at container start, after the mounts exist. `node --watch`
+    # then restarts the server on edits to src/; public/ is served from disk and
+    # needs no restart.
+    command: ["sh", "-ec", "npm ci --omit=dev --no-audit --no-fund && exec node --watch src/server.js"]
+    healthcheck:
+      # Probes both faces of this container inside the app process: the Web UI
+      # entry point, and a login attempt with no credentials, which must answer
+      # 400 — that runs the real handler far enough to query SQLite, so a broken
+      # database answers 500 instead. Prints which side failed.
+      test:
+        - CMD-SHELL
+        - |
+          node -e "
+            const hit = async (u, o) => { try { return (await fetch(u, o)).status; } catch { return 0; } };
+            (async () => {
+              const web = await hit('http://127.0.0.1:3000/');
+              const api = await hit('http://127.0.0.1:3000/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+              const ok = web === 200 && api === 400;
+              console.log('health web=' + web + ' api=' + api + (ok ? ' ok' : ' FAILED'));
+              process.exit(ok ? 0 : 1);
+            })();
+          "
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      # First start installs dependencies from the lockfile before the app is up.
+      start_period: 300s
+
+volumes:
+  base44-node-modules:
+  base44-npm-cache:
+  base44-data:

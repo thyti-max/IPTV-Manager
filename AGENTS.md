@@ -111,3 +111,37 @@ Keep smoke coverage current for:
 The Playwright smoke test starts its own ephemeral server and uses a temporary
 `DATA_DIR` when none is configured. Keep that isolation behavior so browser
 tests do not write to the repository's runtime database.
+
+## Base44 Sandbox Preview
+
+Sandbox-only run path: `docker-compose.base44.yml` plus
+`docker/base44.dev.Dockerfile`. The repository is bind-mounted and the start
+command runs `npm ci --omit=dev` from `package-lock.json`, then
+`node --watch src/server.js` — so edits under `src/` restart the server and
+edits under `public/` are served on reload.
+
+- Never point that compose at the project's own `Dockerfile` or the `ghcr.io`
+  image: both bake a production copy of `src`/`public`, and edits would never
+  reach the preview.
+- The sandbox checks the repository out as `0700 root`, so the dev container
+  runs as root — a non-root user cannot read the bind mount. The deployed image
+  still drops privileges as usual.
+- `DATA_DIR=/data` on a volume, so `db.sqlite`, `epg.db`, `cache/`,
+  `jwt.secret` and `secret.key` stay out of the repository. The
+  `base44-node-modules` and `base44-npm-cache` volumes keep start-up installs
+  fast; drop those volumes to force a clean dependency install.
+- No external credentials are needed to boot. JWT/encryption keys are generated
+  into `DATA_DIR`, and IPTV provider accounts plus the optional MaxMind key are
+  entered in the Web UI. `.env.base44-defaults` only seeds the dev admin login
+  (`admin` / `base44-dev-admin`) and is listed first so that
+  `/run/base44/app.env` overrides it. The app forces a password change at that
+  first sign-in.
+- No application code is gated on `BASE44_PREVIEW_MODE`: Express has no host or
+  origin allowlist, so the preview host needs no configuration.
+- Healthcheck probes `GET /` (Web UI) and `POST /api/login` with no
+  credentials, which must answer 400 — that reaches SQLite, so a broken database
+  answers 500 instead. The login route is `/api/login`, not `/api/auth/login`.
+- A signed-in session cannot be verified automatically: the first successful
+  sign-in raises a native `alert()`, which blocks the preview browser's page
+  thread. Verify the credential path through `POST /api/login`, and drive the
+  signed-in UI by hand.

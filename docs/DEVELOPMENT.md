@@ -15,6 +15,17 @@
 The Docker image and release workflow use `package-lock.json` and `npm ci`.
 If dependencies change, keep `package.json` and `package-lock.json` in sync.
 
+## Sandbox Preview (Base44)
+
+The Base44 preview environment runs the app through
+`docker-compose.base44.yml`, which mounts this checkout and, after installing
+production dependencies from `package-lock.json`, starts the server with
+`node --watch src/server.js`. Edits under `src/` therefore restart the server,
+and edits under `public/` are served on reload. It is sandbox-only scaffolding —
+the image and deployment paths above are unchanged — with runtime data on the
+`/data` volume and a throwaway dev admin login from `.env.base44-defaults`.
+`AGENTS.md` records the details worth knowing before editing it.
+
 ## Pull Request Validation
 
 Manual-load regressions:
